@@ -367,6 +367,8 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
         self.LV = '%s_%s' % (self.INSTANCE['name'], self.NAME)
         self.OLD_STYLE_INSTANCE_PATH = None
         self.PATH = os.path.join('/dev', self.VG, self.LV)
+        self.CACHE_LV = '_base_template'
+        self.CACHE_PATH = os.path.join('/dev', self.VG, self.CACHE_LV)
 
         self.disk = imagebackend.disk
         self.utils = imagebackend.utils
@@ -375,6 +377,7 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
     def prepare_mocks(self):
         fn = self.mox.CreateMockAnything()
         self.mox.StubOutWithMock(self.disk, 'resize2fs')
+        self.mox.StubOutWithMock(self.libvirt_utils, 'get_lvm_cache')
         self.mox.StubOutWithMock(self.libvirt_utils, 'create_lvm_image')
         self.mox.StubOutWithMock(self.disk, 'get_disk_size')
         self.mox.StubOutWithMock(self.utils, 'execute')
@@ -394,6 +397,56 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
         self.utils.execute(*cmd, run_as_root=True)
         self.mox.ReplayAll()
 
+        self.flags(use_cow_images=False)
+        image = self.image_class(self.INSTANCE, self.NAME)
+        image.create_image(fn, self.TEMPLATE_PATH, None)
+
+        self.mox.VerifyAll()
+
+    def _create_image_cow(self, sparse):
+        fn = self.prepare_mocks()
+        fn(max_size=None, target=self.TEMPLATE_PATH)
+        self.libvirt_utils.get_lvm_cache(self.VG, self.TEMPLATE_PATH, '_base')\
+            .AndReturn((self.CACHE_LV, self.CACHE_PATH))
+        self.libvirt_utils.create_lvm_image(self.VG,
+                                            self.CACHE_LV,
+                                            self.TEMPLATE_SIZE,
+                                            sparse=False)
+        cmd = ('qemu-img', 'convert', '-O', 'raw', self.TEMPLATE_PATH,
+               self.CACHE_PATH)
+        self.utils.execute(*cmd, run_as_root=True)
+        self.libvirt_utils.create_lvm_image(self.VG,
+                                            self.LV,
+                                            self.TEMPLATE_SIZE,
+                                            sparse=sparse,
+                                            cache_path=self.CACHE_PATH)
+        self.disk.get_disk_size(self.TEMPLATE_PATH)\
+            .AndReturn(self.TEMPLATE_SIZE)
+        self.mox.ReplayAll()
+
+        self.flags(use_cow_images=True)
+        image = self.image_class(self.INSTANCE, self.NAME)
+        image.create_image(fn, self.TEMPLATE_PATH, None)
+
+        self.mox.VerifyAll()
+
+    def _create_image_cow_cache_exists(self):
+        fn = self.prepare_mocks()
+        fn(max_size=None, target=self.TEMPLATE_PATH)
+        self.mox.StubOutWithMock(os.path, 'exists')
+        self.libvirt_utils.get_lvm_cache(self.VG, self.TEMPLATE_PATH, '_base')\
+            .AndReturn((self.CACHE_LV, self.CACHE_PATH))
+        os.path.exists(self.CACHE_PATH).AndReturn(True)
+        self.libvirt_utils.create_lvm_image(self.VG,
+                                            self.LV,
+                                            self.TEMPLATE_SIZE,
+                                            sparse=False,
+                                            cache_path=self.CACHE_PATH)
+        self.disk.get_disk_size(self.TEMPLATE_PATH)\
+            .AndReturn(self.TEMPLATE_SIZE)
+        self.mox.ReplayAll()
+
+        self.flags(use_cow_images=True)
         image = self.image_class(self.INSTANCE, self.NAME)
         image.create_image(fn, self.TEMPLATE_PATH, None)
 
@@ -425,6 +478,37 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
         self.disk.resize2fs(self.PATH, run_as_root=True)
         self.mox.ReplayAll()
 
+        self.flags(use_cow_images=False)
+        image = self.image_class(self.INSTANCE, self.NAME)
+        image.create_image(fn, self.TEMPLATE_PATH, self.SIZE)
+
+        self.mox.VerifyAll()
+
+    def _create_image_resize_cow(self, sparse):
+        fn = self.prepare_mocks()
+        fn(max_size=self.SIZE, target=self.TEMPLATE_PATH)
+        self.libvirt_utils.get_lvm_cache(self.VG,
+                                         self.TEMPLATE_PATH,
+                                         '_base')\
+            .AndReturn((self.CACHE_LV, self.CACHE_PATH))
+        self.libvirt_utils.create_lvm_image(self.VG,
+                                            self.CACHE_LV,
+                                            self.TEMPLATE_SIZE,
+                                            sparse=False)
+        cmd = ('qemu-img', 'convert', '-O', 'raw', self.TEMPLATE_PATH,
+               self.CACHE_PATH)
+        self.utils.execute(*cmd, run_as_root=True)
+        self.libvirt_utils.create_lvm_image(self.VG,
+                                            self.LV,
+                                            self.SIZE,
+                                            sparse=sparse,
+                                            cache_path=self.CACHE_PATH)
+        self.disk.get_disk_size(self.TEMPLATE_PATH)\
+            .AndReturn(self.TEMPLATE_SIZE)
+        self.disk.resize2fs(self.PATH, run_as_root=True)
+        self.mox.ReplayAll()
+
+        self.flags(use_cow_images=True)
         image = self.image_class(self.INSTANCE, self.NAME)
         image.create_image(fn, self.TEMPLATE_PATH, self.SIZE)
 
@@ -436,6 +520,16 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
     def test_create_image_sparsed(self):
         self.flags(sparse_logical_volumes=True, group='libvirt')
         self._create_image(True)
+
+    def test_create_image_cow(self):
+        self._create_image_cow(False)
+
+    def test_create_image_cow_cache_exists(self):
+        self._create_image_cow_cache_exists()
+
+    def test_create_image_cow_sparsed(self):
+        self.flags(libvirt_sparse_logical_volumes=True)
+        self._create_image_cow(True)
 
     def test_create_image_generated(self):
         self._create_image_generated(False)
@@ -451,6 +545,13 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
         self.flags(sparse_logical_volumes=True, group='libvirt')
         self._create_image_resize(True)
 
+    def test_create_image_resize_cow(self):
+        self._create_image_resize_cow(False)
+
+    def test_create_image_resize_sparsed_cow(self):
+        self.flags(libvirt_sparse_logical_volumes=True)
+        self._create_image_resize_cow(True)
+
     def test_create_image_negative(self):
         fn = self.prepare_mocks()
         fn(max_size=self.SIZE, target=self.TEMPLATE_PATH)
@@ -465,6 +566,7 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
         self.libvirt_utils.remove_logical_volumes(self.PATH)
         self.mox.ReplayAll()
 
+        self.flags(use_cow_images=False)
         image = self.image_class(self.INSTANCE, self.NAME)
 
         self.assertRaises(RuntimeError, image.create_image, fn,

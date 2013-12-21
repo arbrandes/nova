@@ -215,7 +215,24 @@ def create_cow_image(backing_file, path, size=None):
     execute(*cmd)
 
 
-def create_lvm_image(vg, lv, size, sparse=False):
+def get_lvm_cache(vg, base_path, base_dir):
+    base_filename = os.path.basename(base_path)
+    lv = "%s_%s" % (base_dir, base_filename)
+    path = os.path.join('/dev', vg, lv)
+    return (lv, path)
+
+
+def remove_lvm_cache(vg, base_path, base_dir):
+    cache_lv, cache_path = get_lvm_cache(vg, base_path, base_dir)
+    if not os.path.exists(cache_path):
+        LOG.debug(_('Cannot remove %(cache_path)s, it does not exist'),
+                    cache_path)
+        return
+
+    remove_logical_volumes(cache_path)
+
+
+def create_lvm_image(vg, lv, size, sparse=False, cache_path=None):
     """Create LVM image.
 
     Creates a LVM image with given size.
@@ -253,11 +270,18 @@ def create_lvm_image(vg, lv, size, sparse=False):
                          'size': size,
                          'lv': lv})
 
-        cmd = ('lvcreate', '-L', '%db' % preallocated_space,
-                '--virtualsize', '%db' % size, '-n', lv, vg)
+        if cache_path:
+            cmd = ('lvcreate', '-L', '%db' % preallocated_space, '-s',
+                   '--virtualsize', '%db' % size, '-n', lv, cache_path)
+        else:
+            cmd = ('lvcreate', '-L', '%db' % preallocated_space,
+                   '--virtualsize', '%db' % size, '-n', lv, vg)
     else:
         check_size(vg, lv, size)
-        cmd = ('lvcreate', '-L', '%db' % size, '-n', lv, vg)
+        if cache_path:
+            cmd = ('lvcreate', '-L', '%db' % size, '-s', '-n', lv, cache_path)
+        else:
+            cmd = ('lvcreate', '-L', '%db' % size, '-n', lv, vg)
     execute(*cmd, run_as_root=True, attempts=3)
 
 
@@ -385,7 +409,10 @@ def remove_logical_volumes(*paths):
     """Remove one or more logical volume."""
 
     for path in paths:
-        clear_logical_volume(path)
+        lv_info = logical_volume_info(path)
+        # Don't clear snapshots
+        if not lv_info.get('Origin'):
+            clear_logical_volume(path)
 
     if paths:
         lvremove = ('lvremove', '-f') + paths

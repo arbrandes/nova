@@ -73,6 +73,10 @@ CONF = cfg.CONF
 CONF.register_opts(imagecache_opts, 'libvirt')
 CONF.import_opt('instances_path', 'nova.compute.manager')
 CONF.import_opt('image_cache_subdirectory_name', 'nova.virt.imagecache')
+CONF.import_opt('use_cow_images', 'nova.virt.driver')
+CONF.import_opt('libvirt_images_type', 'nova.virt.libvirt.imagebackend')
+CONF.import_opt('libvirt_images_volume_group',
+                'nova.virt.libvirt.imagebackend')
 
 
 def get_cache_fname(images, key):
@@ -553,6 +557,11 @@ class ImageCacheManager(imagecache.ImageCacheManager):
             if self.remove_unused_base_images:
                 for base_file in self.removable_base_files:
                     self._remove_base_file(base_file)
+                    if CONF.libvirt_images_type == 'lvm' and \
+                            CONF.use_cow_images:
+                        virtutils.remove_lvm_cache(
+                                CONF.libvirt_images_volume_group,
+                                base_file, CONF.base_dir_name)
 
         # That's it
         LOG.debug(_('Verification complete'))

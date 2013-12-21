@@ -85,6 +85,7 @@ CONF = cfg.CONF
 CONF.register_opts(__imagebackend_opts, 'libvirt')
 CONF.import_opt('image_cache_subdirectory_name', 'nova.virt.imagecache')
 CONF.import_opt('preallocate_images', 'nova.virt.driver')
+CONF.import_opt('use_cow_images', 'nova.virt.driver')
 
 LOG = logging.getLogger(__name__)
 
@@ -369,6 +370,7 @@ class Lvm(Image):
         # for the more general preallocate_images
         self.sparse = CONF.libvirt.sparse_logical_volumes
         self.preallocate = not self.sparse
+        self.snapshot = CONF.use_cow_images
 
     def _can_fallocate(self):
         return False
@@ -380,9 +382,32 @@ class Lvm(Image):
             self.verify_base_size(base, size, base_size=base_size)
             resize = size > base_size
             size = size if resize else base_size
-            libvirt_utils.create_lvm_image(self.vg, self.lv,
-                                           size, sparse=self.sparse)
-            images.convert_image(base, self.path, 'raw', run_as_root=True)
+
+            # If this is to be a snapshot, cache the base image as a logical
+            # volume.
+            if self.snapshot:
+                cache_lv, cache_path = libvirt_utils.get_lvm_cache(
+                                                        self.vg,
+                                                        base,
+                                                        CONF.base_dir_name)
+                if not os.path.exists(cache_path):
+                    libvirt_utils.create_lvm_image(self.vg,
+                                                   cache_lv,
+                                                   base_size,
+                                                   sparse=False)
+                    images.convert_image(base,
+                                         cache_path,
+                                         'raw',
+                                         run_as_root=True)
+
+                libvirt_utils.create_lvm_image(self.vg, self.lv,
+                                               size, sparse=self.sparse,
+                                               cache_path=cache_path)
+            else:
+                libvirt_utils.create_lvm_image(self.vg, self.lv,
+                                               size, sparse=self.sparse)
+                images.convert_image(base, self.path, 'raw', run_as_root=True)
+
             if resize:
                 disk.resize2fs(self.path, run_as_root=True)
 
