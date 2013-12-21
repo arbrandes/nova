@@ -114,7 +114,10 @@ def resize2fs(path):
     pass
 
 
-def create_lvm_image(vg, lv, size, sparse=False):
+def get_lvm_cache(vg, base_path, base_dir):
+    pass
+
+def create_lvm_image(vg, lv, size, sparse=False, cache_path=None):
     pass
 
 
