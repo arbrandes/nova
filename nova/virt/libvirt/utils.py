@@ -215,7 +215,7 @@ def create_cow_image(backing_file, path, size=None):
     execute(*cmd)
 
 
-def create_lvm_image(vg, lv, size, sparse=False):
+def create_lvm_image(vg, lv, size, sparse=False, base_path=None):
     """Create LVM image.
 
     Creates a LVM image with given size.
@@ -253,11 +253,18 @@ def create_lvm_image(vg, lv, size, sparse=False):
                          'size': size,
                          'lv': lv})
 
-        cmd = ('lvcreate', '-L', '%db' % preallocated_space,
-                '--virtualsize', '%db' % size, '-n', lv, vg)
+        if base_path:
+            cmd = ('lvcreate', '-L', '%db' % preallocated_space, '-s',
+                   '--virtualsize', '%db' % size, '-n', lv, base_path)
+        else:
+            cmd = ('lvcreate', '-L', '%db' % preallocated_space,
+                   '--virtualsize', '%db' % size, '-n', lv, vg)
     else:
         check_size(vg, lv, size)
-        cmd = ('lvcreate', '-L', '%db' % size, '-n', lv, vg)
+        if base_path:
+            cmd = ('lvcreate', '-L', '%db' % size, '-s', '-n', lv, base_path)
+        else:
+            cmd = ('lvcreate', '-L', '%db' % size, '-n', lv, vg)
     execute(*cmd, run_as_root=True, attempts=3)
 
 
@@ -385,7 +392,10 @@ def remove_logical_volumes(*paths):
     """Remove one or more logical volume."""
 
     for path in paths:
-        clear_logical_volume(path)
+        lv_info = logical_volume_info(path)
+        # Don't clear snapshots
+        if not lv_info.get('Origin'):
+            clear_logical_volume(path)
 
     if paths:
         lvremove = ('lvremove', '-f') + paths
